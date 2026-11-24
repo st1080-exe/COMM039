@@ -1,0 +1,88 @@
+country,cluster,continent,bloc,export_value,import_value,total_value
+Australia,0,Oceania,non-EU,3.604,645.4119999999999,649.016
+New Zealand,0,Oceania,non-EU,0.0,22.273,22.273
+Austria,2,Europe,EU27,19.737,1720.523,1740.26
+Belgium,2,Europe,EU27,885.1320000000001,521.395,1406.527
+Italy,3,Europe,EU27,545.7860000000001,3455.369,4001.155
+Romania,2,Europe,EU27,15.775,191.47400000000002,207.24900000000002
+Serbia,0,Europe,non-EU,0.0,14.232,14.232
+Switzerland,0,Europe,non-EU,0.025,4.515,4.54
+China,1,Asia,non-EU,12310.689,59.193,12369.882
+Estonia,0,Europe,EU27,0.0,29.622,29.622
+France,3,Europe,EU27,214.06799999999998,3460.1200000000003,3674.188
+Germany,0,Europe,EU27,13722.774,1764.251,15487.025
+Hungary,2,Europe,EU27,4.297,230.872,235.169
+Ireland,2,Europe,EU27,9.619,0.706,10.325
+Netherlands,2,Europe,EU27,41.309000000000005,518.717,560.026
+Philippines,4,Asia,non-EU,0.0,357.721,357.721
+Poland,4,Europe,EU27,1030.675,295.618,1326.293
+Türkiye,1,Asia,non-EU,36.096,705.456,741.552
+Ukraine,0,Europe,non-EU,0.0,590.6410000000001,590.6410000000001
+Greece,0,Europe,EU27,0.0,73.165,73.165
+Latvia,3,Europe,EU27,0.0,516.1700000000001,516.1700000000001
+Mexico,3,N & C America,non-EU,30.103,733.597,763.6999999999999
+India,1,Asia,non-EU,450.343,3521.0370000000003,3971.38
+Spain,3,Europe,EU27,3.113,1428.721,1431.834
+USA,3,N & C America,non-EU,846.2579999999999,777.524,1623.782
+Bahrain,1,Asia,non-EU,0.0,0.051,0.051
+Bangladesh,1,Asia,non-EU,0.0,0.001,0.001
+Cambodia,1,Asia,non-EU,0.0,0.06,0.06
+Canada,1,N & C America,non-EU,0.021,98.91699999999999,98.93799999999999
+Czechia,2,Europe,EU27,58.144999999999996,203.482,261.627
+Denmark,0,Europe,EU27,10.163,297.51300000000003,307.67600000000004
+"China, Hong Kong SAR",1,Asia,non-EU,43.690999999999995,0.019,43.709999999999994
+Iceland,1,Europe,non-EU,0.0,6.619999999999999,6.619999999999999
+Indonesia,1,Asia,non-EU,101.612,182.244,283.856
+Israel,0,Asia,non-EU,0.0,46.797,46.797
+Japan,4,Asia,non-EU,2.081,1041.121,1043.202
+Rep. of Korea,1,Asia,non-EU,7.7829999999999995,372.524,380.307
+Malaysia,1,Asia,non-EU,0.0,381.249,381.249
+"Other Asia, nes",1,Unknown,non-EU,38.563,37.04,75.60300000000001
+Russian Federation,1,Europe,non-EU,0.209,632.406,632.6149999999999
+Saudi Arabia,1,Asia,non-EU,1.067,26.973,28.04
+Singapore,4,Asia,non-EU,1.399,3.612,5.011
+Slovakia,2,Europe,EU27,5.352,23.675,29.027
+Viet Nam,1,Asia,non-EU,16.091,1930.09,1946.1809999999998
+Zimbabwe,1,Africa,non-EU,0.0,149.447,149.447
+Thailand,1,Asia,non-EU,1.948,156.92000000000002,158.86800000000002
+United Arab Emirates,1,Asia,non-EU,0.046,88.422,88.468
+Uganda,3,Africa,non-EU,0.0,330.846,330.846
+Egypt,1,Africa,non-EU,0.0,0.001,0.001
+United Kingdom,1,Europe,non-EU,1.7209999999999999,1006.478,1008.199
+Luxembourg,3,Europe,EU27,0.0,0.696,0.696
+Argentina,0,South America,non-EU,0.0,69.021,69.021
+Brazil,4,South America,non-EU,0.0,111.133,111.133
+Chile,4,South America,non-EU,0.0,278.597,278.597
+Colombia,0,South America,non-EU,0.0,1.836,1.836
+Croatia,0,Europe,EU27,0.0,54.14,54.14
+Cyprus,0,Europe,EU27,0.0,64.237,64.237
+Ecuador,0,South America,non-EU,0.0,5.449,5.449
+Finland,0,Europe,EU27,2.508,68.67,71.178
+Jordan,0,Asia,non-EU,0.0,3.183,3.183
+Kyrgyzstan,0,Asia,non-EU,0.0,6.131,6.131
+Lithuania,0,Europe,EU27,0.0,10.235,10.235
+Rep. of Moldova,0,Europe,non-EU,28.533,33.282,61.815
+Norway,0,Europe,non-EU,0.0,165.531,165.531
+Pakistan,0,Asia,non-EU,0.0,2.999,2.999
+Slovenia,2,Europe,EU27,25.368000000000002,89.712,115.08000000000001
+South Africa,0,Africa,non-EU,0.33899999999999997,11.513,11.852
+Sweden,0,Europe,EU27,3.4010000000000002,154.628,158.029
+Tunisia,0,Africa,non-EU,0.0,22.46,22.46
+North Macedonia,0,Europe,non-EU,0.0,6.087,6.087
+Uruguay,3,South America,non-EU,0.0,266.695,266.695
+Uzbekistan,0,Asia,non-EU,0.0,23.313,23.313
+Portugal,2,Europe,EU27,0.0,0.022,0.022
+Bulgaria,2,Europe,EU27,0.0,0.72,0.72
+Seychelles,1,Africa,non-EU,0.0,0.067,0.067
+Greenland,0,N & C America,non-EU,0.0,3.813,3.813
+Brunei Darussalam,1,Asia,non-EU,0.0,1.457,1.457
+Qatar,1,Asia,non-EU,0.0,279.664,279.664
+United Rep. of Tanzania,5,Africa,non-EU,0.252,0.021,0.273
+Kazakhstan,1,Asia,non-EU,0.0,0.209,0.209
+Kenya,1,Africa,non-EU,0.0,1.32,1.32
+Nepal,1,Asia,non-EU,0.0,126.128,126.128
+Maldives,1,Asia,non-EU,0.0,0.002,0.002
+Bahamas,3,N & C America,non-EU,0.0,1.44,1.44
+Lesotho,0,Africa,non-EU,0.0,0.036,0.036
+Namibia,0,Africa,non-EU,0.138,0.303,0.441
+Dem. Rep. of the Congo,5,Africa,non-EU,0.0,0.252,0.252

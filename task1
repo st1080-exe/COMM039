@@ -1,0 +1,327 @@
+import os
+import numpy as np
+import pandas as pd
+import networkx as nx
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+# files
+BACI_FILE = "BACI_HS22_Y2024_V202601.csv"
+COUNTRY_FILE = "country_codes_V202601.csv"
+PRODUCT_FILE = "product_codes_HS22_V202601.csv"
+
+# product code for bamboo pulp
+PRODUCT_CODES = ["470630"]
+YEAR = 2024
+OUT_DIR = f"output_{'_'.join(PRODUCT_CODES)}"
+
+os.makedirs(OUT_DIR, exist_ok=True)
+
+
+# loads data
+def load_flows():
+
+    # loads BACI file
+    chunks = pd.read_csv(
+        BACI_FILE,
+        dtype = {"k": str},
+        na_values = ["", "NA", "NaN"],
+        chunksize = 1000000,
+    )
+
+    keep = []
+
+    # finds the bamboo pulp data from the BACI file
+    for c in chunks:
+
+        c["k"] = c["k"].str.zfill(6)
+
+        # k is the product code and t is the year the data is from
+        keep.append(c[c["k"].isin(PRODUCT_CODES) & (c["t"] == YEAR)])
+
+    dataSet = pd.concat(keep, ignore_index=True)
+
+    return dataSet
+
+
+# loads data into lists
+raw = load_flows()
+countries = pd.read_csv(COUNTRY_FILE)
+products = pd.read_csv(PRODUCT_FILE, dtype={"code": str})
+
+# fixes turkey's name
+def fix_mojibake(s):
+    # undo "UTF-8 read as Latin-1" damage; leave normal text untouched
+    try:
+        return s.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
+countries["country_name"] = countries["country_name"].apply(fix_mojibake)
+
+# organises trades into one link per trade
+edges = (raw.groupby(["i", "j"], as_index=False).agg(value=("v", "sum"), volume=("q", "sum")))
+
+# marks null values
+edges.loc[edges["volume"] <= 0, "volume"] = np.nan
+
+# data is in 1k dollars so this converts it back into single dollar value
+edges["unit_value"] = edges["value"] * 1000 / edges["volume"]
+
+# replaces country codes with names
+cmap = countries.set_index("country_code")
+
+edges["exporter"] = edges["i"].map(cmap["country_name"])
+edges["importer"] = edges["j"].map(cmap["country_name"])
+edges["exp_iso3"] = edges["i"].map(cmap["country_iso3"])
+edges["imp_iso3"] = edges["j"].map(cmap["country_iso3"])
+
+# saves edges as csv
+edges.to_csv(f"{OUT_DIR}/edges.csv", index=False)
+
+
+# draws network with info from edges
+G = nx.DiGraph()
+for r in edges.itertuples():
+    G.add_edge(r.exporter, r.importer, value = r.value, volume = r.volume,unit_value = r.unit_value)
+
+# sets distance to represent strength of trade
+for u, v, d in G.edges(data = True):
+    d["distance"] = 1.0 / d["value"]
+
+N, M = G.number_of_nodes(), G.number_of_edges()
+
+
+# measures stats
+nodes = pd.DataFrame(index = sorted(G.nodes()))
+
+nodes["in_degree"] = pd.Series(dict(G.in_degree()))
+nodes["out_degree"] = pd.Series(dict(G.out_degree()))
+
+nodes["import_value"] = pd.Series(dict(G.in_degree(weight = "value")))
+nodes["export_value"] = pd.Series(dict(G.out_degree(weight = "value")))
+
+nodes["import_volume"] = pd.Series(dict(G.in_degree(weight = "volume")))
+nodes["export_volume"] = pd.Series(dict(G.out_degree(weight = "volume")))
+
+nodes["net_exports_value"] = nodes["export_value"] - nodes["import_value"]
+nodes["total_value"] = nodes["export_value"] + nodes["import_value"]
+nodes["export_unit_value"] = nodes["export_value"] * 1000 / nodes["export_volume"].replace(0, np.nan)
+
+# network metrics
+nodes["pagerank_value"] = pd.Series(nx.pagerank(G, weight = "value"))
+nodes["betweenness"] = pd.Series(nx.betweenness_centrality(G, weight = "distance"))
+nodes["clustering_w"] = pd.Series(nx.clustering(G, weight = "value"))
+nodes["hub_score"], nodes["authority_score"] = [pd.Series(s) for s in nx.hits(G)]
+
+nodes.index.name = "country"
+
+# saves to csv
+nodes.to_csv(f"{OUT_DIR}/node_metrics.csv")
+
+# Network-level metrics
+UG = G.to_undirected()
+weaklyConneced = list(nx.weakly_connected_components(G))
+stronglyConnected = list(nx.strongly_connected_components(G))
+totalValue = edges["value"].sum()
+
+# value of how equal export levels are
+# closer to 1 means only a few countries are doing the bulk
+def gini(x):
+
+    # sorts amount
+    x = np.sort(np.asarray(x, dtype = float))
+    num = len(x)
+
+    ranks = (2 * np.arange(1, num + 1) - num - 1)
+
+    value = ranks.dot(x) / (num * x.sum())
+    return value
+
+# gets top importer/ exporter
+def topShare(s, k):
+    return s.sort_values(ascending = False).head(k).sum() / s.sum()
+
+# come back to this and see if u actually need all this shit
+summary = {
+    "Countries": N,
+    "Trade links": M,
+    "Total trade value in millions": round(totalValue / 1e3, 1),
+    "Total trade volume in thousand tons": round(edges["volume"].sum() / 1e3, 1),
+    "Density": round(nx.density(G), 4),
+    "Reciprocity": round(nx.reciprocity(G), 4),
+    "Weakly connected components": len(weaklyConneced),
+    "Largest weak component (nodes)": max(len(c) for c in weaklyConneced),
+    "Strongly connected components": len(stronglyConnected),
+    "Largest strong component (nodes)": max(len(c) for c in stronglyConnected),
+    "Average clustering (undirected)": round(nx.average_clustering(UG), 4),
+    "Average weighted clustering (directed)": round(nodes["clustering_w"].mean(), 4),
+    "Transitivity (undirected)": round(nx.transitivity(UG), 4),
+    "Degree assortativity (out->in)": round(nx.degree_assortativity_coefficient(G, x="out", y="in"), 4),
+    "Mean in/out degree": round(M / N, 2),
+    "Max out-degree (country)": f"{nodes['out_degree'].max()} ({nodes['out_degree'].idxmax()})",
+    "Max in-degree (country)": f"{nodes['in_degree'].max()} ({nodes['in_degree'].idxmax()})",
+    "Top-5 exporters' share of export value": round(topShare(nodes["export_value"], 5), 3),
+    "Top-5 importers' share of import value": round(topShare(nodes["import_value"], 5), 3),
+    "Gini of export value": round(gini(nodes["export_value"]), 3),
+    "Gini of import value": round(gini(nodes["import_value"]), 3),
+}
+
+
+core = UG.subgraph(max(weaklyConneced, key=len))
+summary["Avg shortest path (largest component, undirected)"] = round(nx.average_shortest_path_length(core), 3)
+summary["Diameter (largest component, undirected)"] = nx.diameter(core)
+
+# saves above info into summary.txt
+with open(f"{OUT_DIR}/summary.txt", "w") as f:
+    for k, v in summary.items():
+        f.write(f"{k}: {v}\n")
+        print(f"{k}: {v}")
+
+
+
+
+plt.rcParams.update({"figure.dpi": 130, "font.size": 9})
+
+# simple network for viewing clarity
+
+# head disregards the insignificant trade links
+# keeping them in messes with visability for the central nodes
+top = edges.sort_values("value", ascending = False).head(20)
+
+H = nx.DiGraph()
+
+for r in top.itertuples():
+    H.add_edge(r.exporter, r.importer, value = r.value)
+
+# runs the spring layout algorithm to decide layout of the nodes
+pos = nx.spring_layout(H, k = 1.5, seed = 42, weight = None, iterations = 200)
+
+# size of node set by how much they import/export
+size = np.array([nodes.loc[n, "total_value"] for n in H.nodes()])
+
+# exporters are red and importers are blue
+net = np.array([nodes.loc[n, "net_exports_value"] for n in H.nodes()])
+colors = np.where(net > 0, "#d84930", "#74bec4")
+
+# width of line set by value of trades
+width = np.array([H[u][v]["value"] for u, v in H.edges()])
+width = 7.5 * width / width.max()
+
+fig , ax = plt.subplots(figsize=(12, 9))
+
+nx.draw_networkx_edges(H, pos, node_size= size, width =width, edge_color="grey")
+nx.draw_networkx_nodes(H, pos, node_size = size, node_color = colors, edgecolors = "white", linewidths = 0.5)
+
+lablels = {n: n for n in H.nodes() if nodes.loc[n, "total_value"] >= nodes["total_value"].quantile(0.5)}
+
+nx.draw_networkx_labels(H, pos, labels = lablels, font_size=7)
+
+fig.savefig(f"{OUT_DIR}/fig_network_pretty.png")
+plt.close(fig)
+
+
+
+
+# more complex and harder to see network
+
+top = edges.sort_values("value", ascending = False).head(100)
+
+H = nx.DiGraph()
+
+for r in top.itertuples():
+    H.add_edge(r.exporter, r.importer, value = r.value)
+
+pos = nx.spring_layout(H, k = 2, seed = 42, weight = None, iterations = 200)
+size = np.array([nodes.loc[n, "total_value"] for n in H.nodes()])
+net = np.array([nodes.loc[n, "net_exports_value"] for n in H.nodes()])
+colors = np.where(net > 0, "#d84930", "#74bec4")
+width = np.array([H[u][v]["value"] for u, v in H.edges()])
+width = 7.5 * width / width.max()
+
+fig, ax= plt.subplots(figsize=(12, 9))
+
+nx.draw_networkx_edges(H, pos, node_size= size, width = width, edge_color = "grey")
+nx.draw_networkx_nodes(H, pos, node_size = size, node_color = colors, edgecolors = "white", linewidths = 0.5)
+lablels = {n: n for n in H.nodes() if nodes.loc[n, "total_value"] >= nodes["total_value"].quantile(0.5)}
+nx.draw_networkx_labels(H, pos, labels = lablels, font_size=7)
+
+fig.savefig(f"{OUT_DIR}/fig_network_complex.png")
+plt.close(fig)
+
+
+# top traders
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+for ax, col, color, title in [(axes[0], "export_value", "#d84930", "Top exporters"),(axes[1], "import_value", "#74bec4", "Top importers")]:
+    s = nodes[col].sort_values(ascending=False).head(15)[::-1] / 1e3
+    ax.barh(s.index, s.values, color=color)
+    ax.set_xlabel("Trade value (million USD)")
+    ax.set_title(f"{title} ({YEAR})")
+fig.tight_layout()
+fig.savefig(f"{OUT_DIR}/fig_top_traders.png")
+plt.close(fig)
+
+
+# 5c. Degree distributions (CCDF, log-log)
+def ccdf(values):
+    v = np.sort(np.asarray(values[values > 0]))
+    return v, 1 - np.arange(len(v)) / len(v)
+
+
+fig, ax = plt.subplots(figsize=(6.5, 5))
+for deg, lab in [("in_degree", "In-degree (number of suppliers)"),
+                 ("out_degree", "Out-degree (number of customers)")]:
+    x, y = ccdf(nodes[deg])
+    ax.loglog(x, y, "o", ms=5, alpha=0.7, label=lab)
+ax.set(xlabel="Degree k", ylabel="P(K >= k)")
+ax.legend()
+fig.tight_layout()
+fig.savefig(f"{OUT_DIR}/fig_degree_distribution.png")
+plt.close(fig)
+ 
+# 5d. Value vs volume per exporter (distance from the diagonal = unit value)
+d = nodes[["export_value", "export_volume"]].dropna()
+d = d[(d > 0).all(axis=1)]
+fig, ax = plt.subplots(figsize=(6.5, 5.5))
+ax.scatter(d["export_volume"], d["export_value"] * 1e3, s=25, alpha=0.7, color="#d1495b")
+for n in d.sort_values("export_value", ascending=False).head(8).index:
+    ax.annotate(n, (d.loc[n, "export_volume"], d.loc[n, "export_value"] * 1e3), fontsize=7)
+ax.set_xscale("log"); ax.set_yscale("log")
+ax.set(xlabel="Export volume (tonnes)", ylabel="Export value (USD)",
+       title="Export value vs volume (points above the cloud = higher unit price)")
+fig.tight_layout()
+fig.savefig(f"{OUT_DIR}/fig_value_vs_volume.png")
+plt.close(fig)
+ 
+# Betweenness bar chart
+b = nodes["betweenness"].sort_values(ascending=False)
+b_pos = b[b > 0]
+
+top_b = b_pos.head(15)[::-1]
+
+fig, ax = plt.subplots(figsize=(7, 6))
+ax.barh(top_b.index, top_b.values, color="#608654")
+ax.set(xlabel="Betweenness centrality")
+fig.tight_layout()
+fig.savefig(f"{OUT_DIR}/fig_betweenness_ranked.png")
+plt.close(fig)
+
+# PageRank: importer-side vs exporter-side (ranked bars)
+nodes["pagerank_importer"] = pd.Series(nx.pagerank(G, weight="value"))
+nodes["pagerank_exporter"] = pd.Series(nx.pagerank(G.reverse(), weight="value"))
+nodes[["pagerank_importer", "pagerank_exporter"]].to_csv(f"{OUT_DIR}/pagerank.csv")
+
+TOP_N = 12
+fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+for ax, col, color, title in [
+    (axes[0], "pagerank_importer", "#74bec4", "Importer-side PageRank\n(receives trade from well-connected suppliers)"),
+    (axes[1], "pagerank_exporter", "#d84930", "Exporter-side PageRank\n(supplies well-connected buyers)"),
+]:
+    s = nodes[col].sort_values(ascending=False).head(TOP_N)[::-1]   # highest at the top
+    ax.barh(s.index, s.values, color=color)
+    ax.set(xlabel="PageRank score", title=title)
+fig.tight_layout()
+fig.savefig(f"{OUT_DIR}/fig_pagerank.png")
+plt.close(fig)

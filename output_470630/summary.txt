@@ -1,0 +1,23 @@
+Countries: 87
+Trade links: 274
+Total trade value in millions: 30.5
+Total trade volume in thousand tons: 22.3
+Density: 0.0366
+Reciprocity: 0.2117
+Weakly connected components: 1
+Largest weak component (nodes): 87
+Strongly connected components: 57
+Largest strong component (nodes): 30
+Average clustering (undirected): 0.431
+Average weighted clustering (directed): 0.004
+Transitivity (undirected): 0.2252
+Degree assortativity (out->in): -0.2391
+Mean in/out degree: 3.15
+Max out-degree (country): 53 (Germany)
+Max in-degree (country): 9 (Belgium)
+Top-5 exporters' share of export value: 0.944
+Top-5 importers' share of import value: 0.463
+Gini of export value: 0.963
+Gini of import value: 0.773
+Avg shortest path (largest component, undirected): 2.378
+Diameter (largest component, undirected): 5

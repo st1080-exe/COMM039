@@ -1,0 +1,447 @@
+"""
+Task 2 add-ons: Q1 clustering, Q2 importance vs population, Q3 resilience to disruption.
+
+Run AFTER task1 has produced <OUT_DIR>/edges.csv and <OUT_DIR>/node_metrics.csv.
+    python task2_extensions.py
+Results (tables + figures) are written to <OUT_DIR>/task2/.
+
+Q2 needs a World Bank population file (see POP_FILE below).
+"""
+import os
+import numpy as np
+import pandas as pd
+import networkx as nx
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
+
+# ------------------------------------------------------------------ CONFIG
+OUT_DIR = "output_470630"                    # same folder task1 wrote to
+RUN = ["q1", "q2", "q3"]                     # which parts to run
+SEED = 42
+
+# Q1 (clustering)
+LOG_WEIGHTS = True       # cluster on log(1+value) so the top few flows don't swamp everything
+RESOLUTION = 1.0         # Louvain resolution (higher = more, smaller clusters)
+N_SEEDS = 50             # Louvain restarts, used for the stability check
+
+# Q2 (population)
+# World Bank "Population, total" (SP.POP.TOTL) CSV: https://data.worldbank.org/indicator/SP.POP.TOTL
+POP_FILE = "API_SP.POP.TOTL_DS2_en_csv_v2_58181.csv"
+POP_YEAR = 2024          # falls back to the latest year with data if 2024 is empty
+IMPORTANCE_MEASURES = ["total_value", "export_value", "import_value", "pagerank_value"]
+MAIN_MEASURE = "total_value"
+
+# Q3 (resilience)
+N_RANDOM_RUNS = 200
+# ---------------------------------------------------------------------------
+
+T2 = f"{OUT_DIR}/task2"
+os.makedirs(T2, exist_ok=True)
+plt.rcParams.update({"figure.dpi": 130, "font.size": 9})
+rng = np.random.default_rng(SEED)
+
+# ------------------------------------------------------------ LOAD TASK 1 OUTPUT
+edges = pd.read_csv(f"{OUT_DIR}/edges.csv")
+nodes = pd.read_csv(f"{OUT_DIR}/node_metrics.csv", index_col="country")
+
+iso = (pd.concat([edges[["exporter", "exp_iso3"]].set_axis(["country", "iso3"], axis=1),
+                  edges[["importer", "imp_iso3"]].set_axis(["country", "iso3"], axis=1)])
+         .drop_duplicates("country").set_index("country")["iso3"])
+nodes["iso3"] = iso
+
+G = nx.DiGraph()
+for r in edges.itertuples():
+    G.add_edge(r.exporter, r.importer, value=r.value, volume=r.volume)
+
+# -------------------------------------------------------------- REGION LOOKUP
+_CONTINENTS = {
+    "Africa": """DZA AGO BEN BWA BFA BDI CPV CMR CAF TCD COM COG COD CIV DJI EGY GNQ ERI SWZ ETH GAB GMB GHA
+        GIN GNB KEN LSO LBR LBY MDG MWI MLI MRT MUS MAR MOZ NAM NER NGA RWA STP SEN SYC SLE SOM ZAF SSD SDN
+        TZA TGO TUN UGA ZMB ZWE REU MYT SHN ESH""",
+    "Asia": """AFG ARM AZE BHR BGD BTN BRN KHM CHN GEO IND IDN IRN IRQ ISR JPN JOR KAZ KWT KGZ LAO LBN MYS MDV
+        MNG MMR NPL PRK OMN PAK PSE PHL QAT SAU SGP KOR LKA SYR TJK THA TLS TUR TKM ARE UZB VNM YEM HKG MAC
+        TWN""",
+    "Europe": """ALB AND AUT BLR BEL BIH BGR HRV CYP CZE DNK EST FIN FRA DEU GRC HUN ISL IRL ITA LVA LIE LTU LUX
+        MLT MDA MNE NLD MKD NOR POL PRT ROU RUS SMR SRB SVK SVN ESP SWE CHE UKR GBR FRO GIB XKX""",
+    "N & C America": """CAN USA MEX GRL BMU SPM BLZ CRI SLV GTM HND NIC PAN ATG BHS BRB CUB DMA DOM GRD HTI JAM KNA
+        LCA VCT TTO ABW AIA CUW CYM MSR VGB VIR TCA PRI SXM""",
+    "South America": "ARG BOL BRA CHL COL ECU GUY PRY PER SUR URY VEN FLK GUF",
+    "Oceania": """AUS FJI KIR MHL FSM NRU NZL PLW PNG WSM SLB TON TUV VUT COK NIU TKL NCL PYF WLF ASM GUM MNP
+        PCN CCK CXR NFK""",
+}
+CONTINENT = {c: k for k, v in _CONTINENTS.items() for c in v.split()}
+EU27 = set("""AUT BEL BGR HRV CYP CZE DNK EST FIN FRA DEU GRC HUN IRL ITA LVA LTU LUX MLT NLD POL PRT ROU SVK SVN
+              ESP SWE""".split())
+nodes["continent"] = nodes["iso3"].map(CONTINENT).fillna("Unknown")
+nodes["bloc"] = np.where(nodes["iso3"].isin(EU27), "EU27", "non-EU")
+_unk = nodes.index[nodes["continent"] == "Unknown"].tolist()
+if _unk:
+    print("Countries with no continent assigned (add them to _CONTINENTS):", _unk)
+
+
+def draw_graph(H, pos, node_colors, fname, title, node_size):
+    fig, ax = plt.subplots(figsize=(12, 9))
+    w = np.array([d["value"] for _, _, d in H.edges(data=True)])
+    nx.draw_networkx_edges(H, pos, width=0.3 + 4 * w / w.max(), alpha=0.3, edge_color="grey",
+                           arrows=True, arrowsize=7, connectionstyle="arc3,rad=0.1", ax=ax)
+    order = np.argsort(-np.asarray(node_size))
+    nl = [list(H.nodes())[i] for i in order]
+    nx.draw_networkx_nodes(H, pos, nodelist=nl, node_size=np.asarray(node_size)[order],
+                           node_color=np.asarray(node_colors, dtype=object)[order].tolist(),
+                           edgecolors="white", linewidths=0.5, alpha=0.95, ax=ax)
+    labels = {n: n for n in H.nodes() if nodes.loc[n, "total_value"] >= nodes["total_value"].quantile(0.85)}
+    nx.draw_networkx_labels(H, pos, labels=labels, font_size=7, ax=ax)
+    ax.set_title(title)
+    ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(fname)
+    plt.close(fig)
+
+
+# ===================================================================== Q1
+def _contingency(a, b):
+    return pd.crosstab(pd.Series(a), pd.Series(b)).values.astype(float)
+
+
+def nmi(a, b):
+    C = _contingency(a, b)
+    n = C.sum()
+    pi, pj, pij = C.sum(1) / n, C.sum(0) / n, C / n
+    nz = pij > 0
+    mi = (pij[nz] * np.log(pij[nz] / np.outer(pi, pj)[nz])).sum()
+    hi, hj = -(pi[pi > 0] * np.log(pi[pi > 0])).sum(), -(pj[pj > 0] * np.log(pj[pj > 0])).sum()
+    return 1.0 if hi + hj == 0 else mi / ((hi + hj) / 2)
+
+
+def ari(a, b):
+    C = _contingency(a, b)
+    comb = lambda x: x * (x - 1) / 2
+    sij, sa, sb, n = comb(C).sum(), comb(C.sum(1)).sum(), comb(C.sum(0)).sum(), C.sum()
+    expected, mx = sa * sb / comb(n), (sa + sb) / 2
+    return 1.0 if mx == expected else (sij - expected) / (mx - expected)
+
+
+def labels_from(comms, names):
+    lab = {}
+    for k, c in enumerate(sorted(comms, key=len, reverse=True)):
+        for n in c:
+            lab[n] = k
+    return np.array([lab[n] for n in names])
+
+
+def q1():
+    print("\n===== Q1: clustering =====")
+    U = nx.Graph()                       # Louvain needs an undirected graph: sum both directions
+    for u, v, d in G.edges(data=True):
+        w = np.log1p(d["value"]) if LOG_WEIGHTS else d["value"]
+        if U.has_edge(u, v):
+            U[u][v]["weight"] += w
+        else:
+            U.add_edge(u, v, weight=w)
+    names = list(U.nodes())
+
+    parts = [nx.community.louvain_communities(U, weight="weight", resolution=RESOLUTION, seed=s)
+             for s in range(N_SEEDS)]
+    mods = np.array([nx.community.modularity(U, p, weight="weight", resolution=RESOLUTION) for p in parts])
+    best = parts[int(mods.argmax())]
+    lab_best = labels_from(best, names)
+    nmis = [nmi(lab_best, labels_from(p, names)) for p in parts]
+    print(f"Louvain: {len(best)} clusters, best modularity {mods.max():.3f} "
+          f"(mean {mods.mean():.3f} +/- {mods.std():.3f} over {N_SEEDS} seeds)")
+    print(f"Stability: mean NMI between best partition and the other runs = {np.mean(nmis):.3f}")
+
+    df = pd.DataFrame({"country": names, "cluster": lab_best}).set_index("country")
+    df = df.join(nodes[["continent", "bloc", "export_value", "import_value", "total_value"]])
+    print("\nAgreement with known geography (best Louvain partition):")
+    print(f"  NMI vs continent = {nmi(df['cluster'], df['continent']):.3f}, "
+          f"ARI vs continent = {ari(df['cluster'], df['continent']):.3f}")
+
+    comp = pd.crosstab(df["cluster"], df["continent"])
+    print("\nCluster x continent (number of countries):")
+    print(comp.to_string())
+    summary = pd.DataFrame({
+        "n_countries": df.groupby("cluster").size(),
+        "trade_value_kUSD": df.groupby("cluster")["total_value"].sum(),
+        "dominant_continent": comp.idxmax(axis=1),
+        "purity": comp.max(axis=1) / comp.sum(axis=1),
+        "n_EU27": df[df["bloc"] == "EU27"].groupby("cluster").size(),
+        "top_members": df.sort_values("total_value", ascending=False).groupby("cluster")
+                         .apply(lambda g: ", ".join(g.index[:5]), include_groups=False),
+    }).fillna({"n_EU27": 0})
+    print("\nCluster summary:")
+    print(summary.to_string())
+    df.to_csv(f"{T2}/q1_clusters_louvain.csv")
+    summary.to_csv(f"{T2}/q1_cluster_summary.csv")
+
+    # --- optional: Infomap, which uses edge DIRECTION and weights (pip install infomap)
+    try:
+        from infomap import Infomap
+        idx = {n: i for i, n in enumerate(G.nodes())}
+        im = Infomap(silent=True, directed=True, seed=SEED, num_trials=20)
+        for u, v, d in G.edges(data=True):
+            im.add_link(idx[u], idx[v], d["value"])
+        im.run()
+        mod_of = {n.node_id: n.module_id for n in im.nodes}
+        inf_lab = np.array([mod_of[idx[n]] for n in names])
+        print(f"\nInfomap (directed, weighted): {len(set(inf_lab))} modules; "
+              f"NMI vs Louvain = {nmi(inf_lab, lab_best):.3f}; NMI vs continent = "
+              f"{nmi(inf_lab, df['continent']):.3f}")
+        pd.DataFrame({"country": names, "module": inf_lab}).to_csv(f"{T2}/q1_clusters_infomap.csv", index=False)
+    except ImportError:
+        print("\n(Infomap not installed - skipped. `pip install infomap` to compare a directed method.)")
+
+    # --- network figure: same layout style as fig_network_complex, coloured by cluster
+    from matplotlib.patches import Patch
+
+    top = edges.sort_values("value", ascending=False).head(100)
+
+    H = nx.DiGraph()
+    for r in top.itertuples():
+        H.add_edge(r.exporter, r.importer, value=r.value)
+
+    pos = nx.spring_layout(H, k=2, seed=42, weight=None, iterations=200)
+    size = np.array([nodes.loc[n, "total_value"] for n in H.nodes()])
+    cmap = plt.get_cmap("tab10")
+    colors = [cmap(int(df.loc[n, "cluster"]) % 10) for n in H.nodes()]
+    width = np.array([H[u][v]["value"] for u, v in H.edges()])
+    width = 7.5 * width / width.max()
+
+    fig, ax = plt.subplots(figsize=(12, 9))
+
+    nx.draw_networkx_edges(H, pos, node_size=size, width=width, edge_color="grey", ax=ax)
+    nx.draw_networkx_nodes(H, pos, node_size=size, node_color=colors,
+                           edgecolors="white", linewidths=0.5, ax=ax)
+    labels = {n: n for n in H.nodes()
+              if nodes.loc[n, "total_value"] >= nodes["total_value"].quantile(0.5)}
+    nx.draw_networkx_labels(H, pos, labels=labels, font_size=7, ax=ax)
+
+    present = sorted({int(df.loc[n, "cluster"]) for n in H.nodes()})
+    ax.legend(handles=[Patch(facecolor=cmap(c % 10), label=f"Cluster {c}") for c in present],
+              loc="upper left", fontsize=8, frameon=False)
+    ax.set_title("Louvain clusters on the top 100 trade flows "
+                 "(node size = total trade value, edge width = flow value)")
+    ax.axis("off")
+
+    fig.savefig(f"{T2}/q1_network_clusters.png")
+    plt.close(fig)
+
+
+# ===================================================================== Q2
+def q2():
+    print("\n===== Q2: importance vs population =====")
+    if not os.path.exists(POP_FILE):
+        print(f"Population file '{POP_FILE}' not found. Download World Bank SP.POP.TOTL as CSV "
+              "and set POP_FILE.")
+        return
+    pop = pd.read_csv(POP_FILE, skiprows=4)
+    years = [c for c in pop.columns if c.isdigit()]
+    col = str(POP_YEAR)
+    if col not in pop.columns or pop[col].notna().sum() < 100:
+        col = max(c for c in years if pop[c].notna().sum() > 100)
+        print(f"No usable {POP_YEAR} population data; using {col} instead.")
+    pop = (pop[["Country Code", col]].rename(columns={"Country Code": "iso3", col: "population"})
+              .drop_duplicates("iso3"))
+
+    df = nodes.reset_index().merge(pop, on="iso3", how="left")
+    miss = df[df["population"].isna()]["country"].tolist()
+    if miss:
+        print(f"No population match for {len(miss)} countries (excluded from regression): {miss}")
+    df = df.dropna(subset=["population"]).set_index("country")
+    df = df[df["population"] > 0]
+
+    rows = []
+    for m in IMPORTANCE_MEASURES:
+        sub = df[df[m] > 0]
+        x, y = np.log10(sub["population"]), np.log10(sub[m])
+        slope, icpt = np.polyfit(x, y, 1)
+        resid = y - (slope * x + icpt)
+        r2 = 1 - resid.var() / y.var()
+        z = resid / resid.std()
+        res = pd.DataFrame({"population": sub["population"], m: sub[m],
+                            "expected": 10 ** (slope * x + icpt),
+                            "ratio_actual_to_expected": 10 ** resid, "z_residual": z})
+        res.to_csv(f"{T2}/q2_residuals_{m}.csv")
+        rows.append((m, len(sub), slope, r2))
+        print(f"\n[{m}] log-log fit: slope (elasticity) = {slope:.2f}, R^2 = {r2:.2f}, n = {len(sub)}")
+        print("  Most over-important relative to population:")
+        print(res.sort_values("z_residual", ascending=False).head(8)
+                 [["population", m, "ratio_actual_to_expected", "z_residual"]].round(3).to_string())
+        print("  Most under-important:")
+        print(res.sort_values("z_residual").head(5)
+                 [["population", m, "ratio_actual_to_expected", "z_residual"]].round(3).to_string())
+
+        if m == MAIN_MEASURE:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            ax.scatter(sub["population"], sub[m], s=22, alpha=0.7, color="#2e86ab")
+            xs = np.linspace(x.min(), x.max(), 50)
+            ax.plot(10 ** xs, 10 ** (slope * xs + icpt), "k--", lw=1, label=f"fit: slope {slope:.2f}")
+            for n in res.index[res["z_residual"].abs() > 1.5]:
+                ax.annotate(n, (sub.loc[n, "population"], sub.loc[n, m]), fontsize=7)
+            ax.set_xscale("log"); ax.set_yscale("log")
+            ax.set(xlabel=f"Population ({col})", ylabel=m, title=f"{m} vs population (log-log)")
+            ax.legend()
+            fig.tight_layout()
+            fig.savefig(f"{T2}/q2_scatter_{m}.png")
+            plt.close(fig)
+
+    pc = df.copy()
+    pc["trade_per_capita_USD"] = pc["total_value"] * 1000 / pc["population"]
+    print("\nTop 10 by total trade value per head (USD per person):")
+    print(pc["trade_per_capita_USD"].sort_values(ascending=False).head(10).round(3).to_string())
+    pc[["population", "total_value", "trade_per_capita_USD"]].to_csv(f"{T2}/q2_per_capita.csv")
+    pd.DataFrame(rows, columns=["measure", "n", "slope", "r2"]).to_csv(f"{T2}/q2_fit_summary.csv", index=False)
+
+
+# ===================================================================== Q3
+names3 = list(G.nodes())
+nid = {n: i for i, n in enumerate(names3)}
+N3 = len(names3)
+src = np.array([nid[u] for u, v in G.edges()])
+dst = np.array([nid[v] for u, v in G.edges()])
+val = np.array([G[u][v]["value"] for u, v in G.edges()], dtype=float)
+TOTAL = val.sum()
+is_importer = np.bincount(dst, minlength=N3) > 0
+
+
+def measure(keep, alive):
+    """keep: bool mask over edges still trading; alive: bool mask over countries still present."""
+    retained = val[keep].sum() / TOTAL
+    if alive.sum() == 0:
+        return retained, 0.0, 0.0
+    A = coo_matrix((np.ones(keep.sum()), (src[keep], dst[keep])), shape=(N3, N3))
+    _, lab = connected_components(A, directed=True, connection="weak")
+    giant = np.bincount(lab[alive]).max() / N3
+    indeg = np.bincount(dst[keep], minlength=N3)
+    imp = is_importer & alive
+    supplied = (indeg[imp] > 0).mean() if imp.any() else 0.0
+    return retained, giant, supplied
+
+
+def node_curve(order):
+    gone = np.zeros(N3, bool)
+    out = [measure(~gone[src] & ~gone[dst], ~gone)]
+    for n in order:
+        gone[n] = True
+        out.append(measure(~gone[src] & ~gone[dst], ~gone))
+    return np.array(out)                          # shape (N3+1, 3)
+
+
+def adaptive_order():
+    gone = np.zeros(N3, bool)
+    order = []
+    for _ in range(N3):
+        keep = ~gone[src] & ~gone[dst]
+        s = np.bincount(src[keep], val[keep], N3) + np.bincount(dst[keep], val[keep], N3)
+        s[gone] = -1
+        n = int(s.argmax())
+        order.append(n)
+        gone[n] = True
+    return order
+
+
+def edge_curve(order, steps=60):
+    keep = np.ones(len(val), bool)
+    alive = np.ones(N3, bool)
+    ks = np.unique(np.linspace(0, len(val), steps).astype(int))
+    out = []
+    for k in ks:
+        keep[:] = True
+        keep[order[:k]] = False
+        out.append(measure(keep, alive))
+    return ks / len(val), np.array(out)
+
+
+def half_point(frac, curve):
+    below = np.where(curve <= 0.5)[0]
+    return frac[below[0]] if len(below) else np.nan
+
+
+def q3():
+    print("\n===== Q3: resilience to disruption =====")
+    frac = np.arange(N3 + 1) / N3
+    nd = nodes.reindex(names3)
+    bet = nd["betweenness"].fillna(0).values
+    strategies = {
+        "Targeted: export value": np.argsort(-nd["export_value"].fillna(0).values),
+        "Targeted: import value": np.argsort(-nd["import_value"].fillna(0).values),
+        "Targeted: betweenness": np.argsort(-bet),
+        "Targeted: adaptive total value": np.array(adaptive_order()),
+    }
+    curves = {k: node_curve(o) for k, o in strategies.items()}
+    rand = np.mean([node_curve(rng.permutation(N3)) for _ in range(N_RANDOM_RUNS)], axis=0)
+    curves["Random failure (mean)"] = rand
+
+    labels = ["Share of trade value retained", "Largest connected component (share of all countries)",
+              "Importers with >=1 supplier left"]
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
+    for k, c in curves.items():
+        for j, ax in enumerate(axes):
+            ax.plot(frac, c[:, j], label=k, lw=2 if "Random" in k else 1.3,
+                    ls="--" if "Random" in k else "-")
+    for ax, lab in zip(axes, labels):
+        ax.set(xlabel="Fraction of countries removed", ylabel=lab, xlim=(0, 1), ylim=(0, 1.02))
+        ax.set_title(lab, fontsize=9)
+    axes[0].legend(fontsize=7)
+    fig.tight_layout()
+    fig.savefig(f"{T2}/q3_node_removal.png")
+    plt.close(fig)
+
+    print("\nFraction of countries that must be removed before trade value retained <= 50%:")
+    for k, c in curves.items():
+        print(f"  {k:34s} {half_point(frac, c[:, 0]):.3f}")
+    print("Number of countries removed (of {}) for 50% value loss, targeted export value: {}"
+          .format(N3, int(np.where(curves['Targeted: export value'][:, 0] <= 0.5)[0][0])))
+    pd.DataFrame({f"{k}|{lab}": c[:, j] for k, c in curves.items() for j, lab in enumerate(["value", "giant", "supplied"])},
+                 index=frac).to_csv(f"{T2}/q3_node_curves.csv")
+
+    # --- edge removal: trade disputes / blocked routes
+    order_top = np.argsort(-val)
+    fe, ce_t = edge_curve(order_top)
+    ce_r = np.mean([edge_curve(rng.permutation(len(val)))[1] for _ in range(N_RANDOM_RUNS // 4)], axis=0)
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
+    for j, (ax, lab) in enumerate(zip(axes, labels)):
+        ax.plot(fe, ce_t[:, j], label="Targeted: strongest flows first")
+        ax.plot(fe, ce_r[:, j], "--", label="Random flows (mean)")
+        ax.set(xlabel="Fraction of trade links removed", xlim=(0, 1), ylim=(0, 1.02))
+        ax.set_title(lab, fontsize=9)
+    axes[0].legend(fontsize=7)
+    fig.tight_layout()
+    fig.savefig(f"{T2}/q3_edge_removal.png")
+    plt.close(fig)
+    print(f"Links that must be cut (targeted) before value retained <= 50%: {half_point(fe, ce_t[:, 0]):.3f} "
+          f"of all links; random: {half_point(fe, ce_r[:, 0]):.3f}")
+
+    # --- case study: knock out each single country
+    rows = []
+    for n in range(N3):
+        gone = np.zeros(N3, bool)
+        gone[n] = True
+        r, g, s = measure(~gone[src] & ~gone[dst], ~gone)
+        imp_left = is_importer & ~gone
+        indeg = np.bincount(dst[~gone[src] & ~gone[dst]], minlength=N3)
+        rows.append((names3[n], 1 - r, int((imp_left & (indeg == 0)).sum()), g))
+    single = pd.DataFrame(rows, columns=["country", "value_lost_share", "importers_cut_off",
+                                         "largest_component"]).set_index("country")
+    single = single.sort_values("value_lost_share", ascending=False)
+    single.to_csv(f"{T2}/q3_single_country_shock.csv")
+    print("\nSingle-country shocks (top 10 by trade value lost):")
+    print(single.head(10).round(3).to_string())
+
+    # --- supplier dependence of importers
+    imp_tot = np.bincount(dst, val, N3)
+    top_share = np.zeros(N3)
+    np.maximum.at(top_share, dst, val / np.where(imp_tot[dst] > 0, imp_tot[dst], 1))
+    hhi = np.bincount(dst, (val / np.where(imp_tot[dst] > 0, imp_tot[dst], 1)) ** 2, N3)
+    dep = pd.DataFrame({"top_supplier_share": top_share, "hhi": hhi}, index=names3)[is_importer]
+    print(f"\nSupplier dependence: {(dep['top_supplier_share'] > 0.5).mean():.1%} of importers get >50% of "
+          f"their imports from one supplier; {(dep['top_supplier_share'] > 0.9).mean():.1%} get >90%.")
+    dep.to_csv(f"{T2}/q3_importer_dependence.csv")
+
+
+for part, fn in [("q1", q1), ("q2", q2), ("q3", q3)]:
+    if part in RUN:
+        fn()
+print(f"\nDone. Results in ./{T2}/")
